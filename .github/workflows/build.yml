@@ -30,12 +30,17 @@ jobs:
           arduino-cli lib install TinyGPSPlus
           arduino-cli lib install "heltec-eink-modules"
 
+      - name: Prepare sketch directory
+        run: |
+          mkdir -p DroneDetector
+          cp DroneDetector.ino splash_bitmap.h DroneDetector/
+
       - name: Compile sketch
         run: |
           arduino-cli compile \
             --fqbn Heltec-esp32:esp32:vision_master_e290 \
             --output-dir build \
-            DroneDetector.ino
+            DroneDetector
 
       - name: Rename binary with version
         run: |
