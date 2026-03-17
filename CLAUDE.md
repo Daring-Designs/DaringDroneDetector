@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DroneDetector is an ESP32-based drone signal scanner running on a Heltec Vision Master E290 (ESP32-S3 + 2.9" e-ink display). It detects drones via three methods simultaneously: ELRS LoRa (900MHz + 2.4GHz), WiFi Remote ID, and BLE OpenDroneID. All code lives in a single `DroneDetector.ino` sketch.
+DaringDroneDetector is an ESP32-based drone signal scanner running on a Heltec Vision Master E290 (ESP32-S3 + 2.9" e-ink display). It detects drones via three methods simultaneously: ELRS LoRa (900MHz + 2.4GHz), WiFi Remote ID, and BLE OpenDroneID. All code lives in a single `DaringDroneDetector.ino` sketch.
 
 ## Build & Upload
 
@@ -14,6 +14,8 @@ This is an Arduino IDE project (no platformio.ini). To compile and upload:
 - **Required libraries**: RadioLib, TinyGPSPlus, heltec-eink-modules
 - **Built-in libraries**: BLEDevice, WiFi, esp_wifi (from ESP32 Arduino core)
 - Upload via Arduino IDE or `arduino-cli compile && arduino-cli upload`
+- Board package URL: `https://resource.heltec.cn/download/package_heltec_esp32_index.json`
+- FQBN: `Heltec-esp32:esp32:heltec_vision_master_e290`
 
 There are no tests or linting configured.
 
@@ -58,6 +60,6 @@ E-ink pins (1,2,4,5,6) managed by heltec-eink-modules library.
 
 ## File Descriptions
 
-- `DroneDetector.ino` — entire application (~1945 lines)
+- `DaringDroneDetector.ino` — entire application (~1945 lines)
 - `splash_bitmap.h` — generated C byte array from `daringDrones.bmp` (296x128 1-bit, palette-inverted for GFX drawBitmap)
 - `daringDrones.bmp` — source splash image

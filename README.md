@@ -50,7 +50,7 @@ Download and install [Arduino IDE 2.x](https://www.arduino.cc/en/software).
 1. Open **File > Preferences**
 2. Add this URL to **Additional Board Manager URLs**:
    ```
-   https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/releases/download/0.0.9/package_heltec_esp32_index.json
+   https://resource.heltec.cn/download/package_heltec_esp32_index.json
    ```
 3. Open **Tools > Board > Boards Manager**, search for **Heltec ESP32**, and install it
 
@@ -67,7 +67,7 @@ The following are included with the ESP32 Arduino core (no separate install need
 
 ### 4. Select Board & Upload
 
-1. Open `DroneDetector.ino` in Arduino IDE
+1. Open `DaringDroneDetector.ino` in Arduino IDE
 2. Select **Tools > Board > Heltec Vision Master E290**
 3. Select the correct serial port under **Tools > Port**
 4. Click **Upload**
@@ -75,8 +75,8 @@ The following are included with the ESP32 Arduino core (no separate install need
 ### Using arduino-cli
 
 ```bash
-arduino-cli compile --fqbn Heltec-esp32:esp32:vision_master_e290 DroneDetector.ino
-arduino-cli upload --fqbn Heltec-esp32:esp32:vision_master_e290 -p /dev/ttyUSB0 DroneDetector.ino
+arduino-cli compile --fqbn Heltec-esp32:esp32:heltec_vision_master_e290 DaringDroneDetector.ino
+arduino-cli upload --fqbn Heltec-esp32:esp32:heltec_vision_master_e290 -p /dev/ttyUSB0 DaringDroneDetector.ino
 ```
 
 ## Serial Commands

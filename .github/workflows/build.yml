@@ -19,7 +19,7 @@ jobs:
 
       - name: Install Heltec board package
         env:
-          BOARD_URL: https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/releases/download/0.0.9/package_heltec_esp32_index.json
+          BOARD_URL: https://resource.heltec.cn/download/package_heltec_esp32_index.json
         run: |
           arduino-cli core update-index --additional-urls "$BOARD_URL"
           arduino-cli core install Heltec-esp32:esp32 --additional-urls "$BOARD_URL"
@@ -32,23 +32,23 @@ jobs:
 
       - name: Prepare sketch directory
         run: |
-          mkdir -p DroneDetector
-          cp DroneDetector.ino splash_bitmap.h DroneDetector/
+          mkdir -p DaringDroneDetector
+          cp DaringDroneDetector.ino splash_bitmap.h DaringDroneDetector/
 
       - name: Compile sketch
         run: |
           arduino-cli compile \
-            --fqbn Heltec-esp32:esp32:vision_master_e290 \
+            --fqbn Heltec-esp32:esp32:heltec_vision_master_e290 \
             --output-dir build \
-            DroneDetector
+            DaringDroneDetector
 
       - name: Rename binary with version
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          mv build/DroneDetector.ino.bin "DroneDetector-${VERSION}.bin"
+          mv build/DaringDroneDetector.ino.bin "DaringDroneDetector-${VERSION}.bin"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: DroneDetector-*.bin
+          files: DaringDroneDetector-*.bin
           generate_release_notes: true
