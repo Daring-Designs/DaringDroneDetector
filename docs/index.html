@@ -246,49 +246,6 @@
       letter-spacing: 0.06em;
     }
 
-    /* ── BOM ── */
-    .bom {
-      margin-bottom: 32px;
-    }
-
-    .bom h2 {
-      font-size: 1.1rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-bottom: 16px;
-      color: var(--fg);
-    }
-
-    .bom-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.95rem;
-    }
-
-    .bom-table th {
-      text-align: left;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      font-size: 0.8rem;
-      color: var(--dim);
-      border-bottom: 1px solid #333;
-      padding: 6px 0;
-    }
-
-    .bom-table td {
-      padding: 8px 0;
-      border-bottom: 1px solid #222;
-      vertical-align: top;
-    }
-
-    .bom-table td:first-child {
-      color: var(--orange);
-      font-weight: 600;
-      padding-right: 16px;
-      white-space: nowrap;
-    }
-
     /* ── Compatibility ── */
     .compat {
       font-size: 0.9rem;
@@ -365,37 +322,6 @@
       </div>
     </div>
 
-    <!-- BOM -->
-    <div class="bom">
-      <h2 id="bom-title">What you need — Heltec E290</h2>
-      <table class="bom-table" id="bom-heltec">
-        <thead>
-          <tr><th>Component</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Heltec Vision Master E290</td><td>ESP32-S3 dev board with 2.9" e-ink display</td></tr>
-          <tr><td>Waveshare Core1121-XF</td><td>LR1121 dual-band LoRa radio (900MHz + 2.4GHz)</td></tr>
-          <tr><td>HGLRC M100 Mini GPS</td><td>UART GPS module</td></tr>
-          <tr><td>Passive piezo buzzer</td><td>With transistor driver to 5V</td></tr>
-          <tr><td>5-way nav switch</td><td>For display navigation</td></tr>
-          <tr><td>915MHz antenna</td><td>For ELRS LoRa reception</td></tr>
-          <tr><td>LiPo battery</td><td>3.7V single cell</td></tr>
-        </tbody>
-      </table>
-      <table class="bom-table" id="bom-lilygo" style="display:none">
-        <thead>
-          <tr><th>Component</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>LilyGO T-Display S3 Pro</td><td>ESP32-S3 with 222×480 IPS touch display</td></tr>
-          <tr><td>Waveshare Core1121-XF</td><td>LR1121 dual-band LoRa radio (900MHz + 2.4GHz)</td></tr>
-          <tr><td>ERM vibration motor</td><td>Haptic alert on detection</td></tr>
-          <tr><td>915MHz antenna</td><td>For ELRS LoRa reception</td></tr>
-          <tr><td>LiPo battery</td><td>Managed by onboard SY6970 PMIC</td></tr>
-        </tbody>
-      </table>
-    </div>
-
     <p class="compat">
       <strong>Chrome / Edge only.</strong>&nbsp; Web Serial is not supported in Firefox or Safari.
       Full hardware details and wiring in the
@@ -413,18 +339,8 @@
     document.getElementById('year').textContent = new Date().getFullYear();
 
     const devices = {
-      heltec: {
-        label: 'Heltec Vision Master E290',
-        manifest: 'manifest_heltec.json',
-        bomId: 'bom-heltec',
-        bomTitle: 'What you need — Heltec E290',
-      },
-      lilygo: {
-        label: 'LilyGO T-Display S3 Pro',
-        manifest: 'manifest_lilygo.json',
-        bomId: 'bom-lilygo',
-        bomTitle: 'What you need — LilyGO S3 Pro',
-      },
+      heltec: { label: 'Heltec Vision Master E290', manifest: 'manifest_heltec.json' },
+      lilygo: { label: 'LilyGO T-Display S3 Pro',   manifest: 'manifest_lilygo.json' },
     };
 
     let current = 'heltec';
@@ -436,10 +352,6 @@
       const d = devices[id];
       document.getElementById('device-label').textContent = d.label;
       document.getElementById('install-btn').setAttribute('manifest', d.manifest);
-      document.getElementById('bom-title').textContent = d.bomTitle;
-
-      document.getElementById('bom-heltec').style.display = id === 'heltec' ? '' : 'none';
-      document.getElementById('bom-lilygo').style.display = id === 'lilygo' ? '' : 'none';
 
       document.getElementById('btn-heltec').classList.toggle('active', id === 'heltec');
       document.getElementById('btn-lilygo').classList.toggle('active', id === 'lilygo');
