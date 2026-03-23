@@ -1,0 +1,22 @@
+{
+  "name": "Daring Drone Detector — LilyGO T-Display S3 Pro",
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "https://github.com/Daring-Designs/DaringDroneDetector/releases/latest/download/LillyGo_S3_Pro_LR1121-bootloader.bin",
+          "offset": 0
+        },
+        {
+          "path": "https://github.com/Daring-Designs/DaringDroneDetector/releases/latest/download/LillyGo_S3_Pro_LR1121-partitions.bin",
+          "offset": 32768
+        },
+        {
+          "path": "https://github.com/Daring-Designs/DaringDroneDetector/releases/latest/download/LillyGo_S3_Pro_LR1121-firmware.bin",
+          "offset": 65536
+        }
+      ]
+    }
+  ]
+}

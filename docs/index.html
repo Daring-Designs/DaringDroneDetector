@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Daring Drone Detector — Flash Firmware</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Permanent+Marker&display=swap" rel="stylesheet" />
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #18171C;
+      --bg2:      #2E322D;
+      --fg:       #F2F2F2;
+      --orange:   #FF5E00;
+      --green:    #38B432;
+      --dim:      #888;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 18px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      text-align: center;
+      padding: 48px 24px 24px;
+    }
+
+    .logo {
+      font-family: 'Permanent Marker', cursive;
+      font-size: clamp(2rem, 6vw, 3.5rem);
+      color: var(--orange);
+      display: inline-block;
+      transform: rotate(-2deg);
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .logo span {
+      display: block;
+      font-size: 0.45em;
+      color: var(--fg);
+      transform: rotate(2deg);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+
+    /* ── Main content ── */
+    main {
+      flex: 1;
+      width: 100%;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 16px 24px 64px;
+    }
+
+    h1 {
+      font-family: 'Permanent Marker', cursive;
+      font-size: clamp(1.8rem, 5vw, 2.8rem);
+      color: var(--orange);
+      transform: rotate(-1deg);
+      display: inline-block;
+      margin-bottom: 12px;
+    }
+
+    .subtitle {
+      color: var(--dim);
+      font-size: 1rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 40px;
+    }
+
+    /* ── Device selector ── */
+    .device-selector {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+
+    .device-btn {
+      flex: 1;
+      padding: 16px 12px;
+      background: var(--bg2);
+      border: 2px solid transparent;
+      border-radius: 4px;
+      color: var(--fg);
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      text-align: center;
+    }
+
+    .device-btn:hover {
+      border-color: var(--orange);
+    }
+
+    .device-btn.active {
+      border-color: var(--orange);
+      background: #2a1f18;
+      color: var(--orange);
+    }
+
+    .device-btn .device-name {
+      display: block;
+      font-size: 1.2rem;
+      margin-bottom: 4px;
+    }
+
+    .device-btn .device-sub {
+      display: block;
+      font-weight: 400;
+      font-size: 0.85rem;
+      color: var(--dim);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .device-btn.active .device-sub {
+      color: #c44;
+    }
+
+    /* ── Flash card ── */
+    .flash-card {
+      background: var(--bg2);
+      border-radius: 4px;
+      padding: 32px;
+      margin-bottom: 32px;
+    }
+
+    .flash-card h2 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+      color: var(--fg);
+    }
+
+    .flash-card .device-label {
+      color: var(--orange);
+      font-weight: 700;
+      font-size: 1.1rem;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+      display: block;
+    }
+
+    /* Steps */
+    .steps {
+      list-style: none;
+      margin-bottom: 32px;
+      counter-reset: steps;
+    }
+
+    .steps li {
+      counter-increment: steps;
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+      font-size: 1rem;
+      line-height: 1.4;
+    }
+
+    .steps li::before {
+      content: counter(steps);
+      flex-shrink: 0;
+      width: 26px;
+      height: 26px;
+      background: var(--orange);
+      color: #000;
+      font-weight: 700;
+      font-size: 0.85rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Install button */
+    .install-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    esp-web-install-button {
+      --esp-tools-button-color: #000;
+      --esp-tools-button-background: var(--orange);
+    }
+
+    esp-web-install-button::part(button) {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1.2rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 12px 28px;
+      background: var(--orange);
+      color: #000;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      animation: none;
+      transition: filter 0.15s, transform 0.15s;
+    }
+
+    esp-web-install-button::part(button):hover {
+      animation: shake 0.3s ease;
+      filter: brightness(1.1);
+    }
+
+    @keyframes shake {
+      0%   { transform: translateX(0); }
+      20%  { transform: translateX(-4px) rotate(-1deg); }
+      40%  { transform: translateX(4px) rotate(1deg); }
+      60%  { transform: translateX(-3px); }
+      80%  { transform: translateX(3px); }
+      100% { transform: translateX(0); }
+    }
+
+    .browser-note {
+      color: var(--dim);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── BOM ── */
+    .bom {
+      margin-bottom: 32px;
+    }
+
+    .bom h2 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 16px;
+      color: var(--fg);
+    }
+
+    .bom-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+
+    .bom-table th {
+      text-align: left;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 0.8rem;
+      color: var(--dim);
+      border-bottom: 1px solid #333;
+      padding: 6px 0;
+    }
+
+    .bom-table td {
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+      vertical-align: top;
+    }
+
+    .bom-table td:first-child {
+      color: var(--orange);
+      font-weight: 600;
+      padding-right: 16px;
+      white-space: nowrap;
+    }
+
+    /* ── Compatibility ── */
+    .compat {
+      font-size: 0.9rem;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .compat strong {
+      color: var(--green);
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      padding: 24px;
+      color: var(--dim);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      border-top: 1px solid #222;
+    }
+
+    footer a {
+      color: var(--orange);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">
+      Daring Drones
+      <span>Drone Detector</span>
+    </div>
+  </header>
+
+  <main>
+    <h1>Flash Firmware</h1>
+    <p class="subtitle">Browser-based installer — no Arduino IDE required</p>
+
+    <!-- Device selector -->
+    <div class="device-selector">
+      <button class="device-btn active" id="btn-heltec" onclick="selectDevice('heltec')">
+        <span class="device-name">Heltec E290</span>
+        <span class="device-sub">2.9" e-ink · GPS · Nav switch</span>
+      </button>
+      <button class="device-btn" id="btn-lilygo" onclick="selectDevice('lilygo')">
+        <span class="device-name">LilyGO S3 Pro</span>
+        <span class="device-sub">IPS touchscreen · Speaker · RTC</span>
+      </button>
+    </div>
+
+    <!-- Flash card -->
+    <div class="flash-card">
+      <h2>Install</h2>
+      <span class="device-label" id="device-label">Heltec Vision Master E290</span>
+
+      <ol class="steps">
+        <li>Connect your board to this computer via USB.</li>
+        <li>Click <strong>Install</strong> below and select the serial port when prompted.</li>
+        <li>Wait for the flash to complete — takes about 30 seconds.</li>
+        <li>The board will reboot automatically into the Daring Drone Detector firmware.</li>
+      </ol>
+
+      <div class="install-row">
+        <esp-web-install-button id="install-btn" manifest="manifest_heltec.json"></esp-web-install-button>
+        <span class="browser-note">Requires Chrome or Edge</span>
+      </div>
+    </div>
+
+    <!-- BOM -->
+    <div class="bom">
+      <h2 id="bom-title">What you need — Heltec E290</h2>
+      <table class="bom-table" id="bom-heltec">
+        <thead>
+          <tr><th>Component</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Heltec Vision Master E290</td><td>ESP32-S3 dev board with 2.9" e-ink display</td></tr>
+          <tr><td>Waveshare Core1121-XF</td><td>LR1121 dual-band LoRa radio (900MHz + 2.4GHz)</td></tr>
+          <tr><td>HGLRC M100 Mini GPS</td><td>UART GPS module</td></tr>
+          <tr><td>Passive piezo buzzer</td><td>With transistor driver to 5V</td></tr>
+          <tr><td>5-way nav switch</td><td>For display navigation</td></tr>
+          <tr><td>915MHz antenna</td><td>For ELRS LoRa reception</td></tr>
+          <tr><td>LiPo battery</td><td>3.7V single cell</td></tr>
+        </tbody>
+      </table>
+      <table class="bom-table" id="bom-lilygo" style="display:none">
+        <thead>
+          <tr><th>Component</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>LilyGO T-Display S3 Pro</td><td>ESP32-S3 with 222×480 IPS touch display</td></tr>
+          <tr><td>Waveshare Core1121-XF</td><td>LR1121 dual-band LoRa radio (900MHz + 2.4GHz)</td></tr>
+          <tr><td>ERM vibration motor</td><td>Haptic alert on detection</td></tr>
+          <tr><td>915MHz antenna</td><td>For ELRS LoRa reception</td></tr>
+          <tr><td>LiPo battery</td><td>Managed by onboard SY6970 PMIC</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="compat">
+      <strong>Chrome / Edge only.</strong>&nbsp; Web Serial is not supported in Firefox or Safari.
+      Full hardware details and wiring in the
+      <a href="https://github.com/Daring-Designs/DaringDroneDetector" style="color:var(--orange)">GitHub repository</a>.
+    </p>
+  </main>
+
+  <footer>
+    &copy; <span id="year"></span> Daring Designs &mdash;
+    <a href="https://github.com/Daring-Designs/DaringDroneDetector">GitHub</a> &mdash;
+    <a href="https://daringdrones.com">daringdrones.com</a>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    const devices = {
+      heltec: {
+        label: 'Heltec Vision Master E290',
+        manifest: 'manifest_heltec.json',
+        bomId: 'bom-heltec',
+        bomTitle: 'What you need — Heltec E290',
+      },
+      lilygo: {
+        label: 'LilyGO T-Display S3 Pro',
+        manifest: 'manifest_lilygo.json',
+        bomId: 'bom-lilygo',
+        bomTitle: 'What you need — LilyGO S3 Pro',
+      },
+    };
+
+    let current = 'heltec';
+
+    function selectDevice(id) {
+      if (id === current) return;
+      current = id;
+
+      const d = devices[id];
+      document.getElementById('device-label').textContent = d.label;
+      document.getElementById('install-btn').setAttribute('manifest', d.manifest);
+      document.getElementById('bom-title').textContent = d.bomTitle;
+
+      document.getElementById('bom-heltec').style.display = id === 'heltec' ? '' : 'none';
+      document.getElementById('bom-lilygo').style.display = id === 'lilygo' ? '' : 'none';
+
+      document.getElementById('btn-heltec').classList.toggle('active', id === 'heltec');
+      document.getElementById('btn-lilygo').classList.toggle('active', id === 'lilygo');
+    }
+  </script>
+</body>
+</html>

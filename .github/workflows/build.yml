@@ -28,28 +28,26 @@ jobs:
           arduino-cli lib install TinyGPSPlus
           arduino-cli lib install "heltec-eink-modules"
 
-      - name: Prepare sketch directory
-        run: |
-          mkdir -p DaringDroneDetector
-          cp DaringDroneDetector.ino splash_bitmap.h DaringDroneDetector/
-
       - name: Compile sketch
         run: |
           arduino-cli compile \
             --fqbn Heltec-esp32:esp32:heltec_vision_master_e290 \
             --output-dir build \
-            DaringDroneDetector
+            Heltec_e290
 
-      - name: Stage binary
+      - name: Stage binaries
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          cp build/DaringDroneDetector.ino.bin "DaringDroneDetector-${VERSION}.bin"
+          cp build/Heltec_e290.ino.bin          "Heltec_e290-${VERSION}.bin"
+          cp build/Heltec_e290.ino.bootloader.bin "Heltec_e290-bootloader.bin"
+          cp build/Heltec_e290.ino.partitions.bin "Heltec_e290-partitions.bin"
+          cp build/Heltec_e290.ino.bin            "Heltec_e290-firmware.bin"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: heltec-bin
-          path: DaringDroneDetector-*.bin
+          path: Heltec_e290-*.bin
 
   build-lilygo:
     runs-on: ubuntu-latest
@@ -80,10 +78,13 @@ jobs:
             --output-dir build \
             LillyGo_S3_Pro_LR1121
 
-      - name: Stage binary
+      - name: Stage binaries
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          cp build/LillyGo_S3_Pro_LR1121.ino.bin "LillyGo_S3_Pro_LR1121-${VERSION}.bin"
+          cp build/LillyGo_S3_Pro_LR1121.ino.bin          "LillyGo_S3_Pro_LR1121-${VERSION}.bin"
+          cp build/LillyGo_S3_Pro_LR1121.ino.bootloader.bin "LillyGo_S3_Pro_LR1121-bootloader.bin"
+          cp build/LillyGo_S3_Pro_LR1121.ino.partitions.bin "LillyGo_S3_Pro_LR1121-partitions.bin"
+          cp build/LillyGo_S3_Pro_LR1121.ino.bin            "LillyGo_S3_Pro_LR1121-firmware.bin"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
