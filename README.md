@@ -15,6 +15,11 @@ Two hardware builds are available:
 
 Both builds use a **Waveshare Core1121-XF** (LR1121 dual-band LoRa radio) for ELRS detection.
 
+## Flash Firmware
+
+Flash the latest firmware directly from your browser — no Arduino IDE required:
+**[flasher.daring-drones.com](https://flasher.daring-drones.com)**
+
 ## 3D Printed Case
 
 Printable enclosures available on Printables: [TODO: Add Printables link](https://www.printables.com/)
