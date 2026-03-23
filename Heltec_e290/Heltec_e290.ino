@@ -177,9 +177,7 @@ int detectionCount = 0;
 volatile int elrsHitCount = 0;
 volatile int elrsStrongestRSSI = -999;
 volatile float elrsBestSNR = -999;
-volatile int wifiDetectedCount = 0;
 volatile int wifiStrongestRSSI = -999;
-volatile int bleRemoteIDCount = 0;
 volatile int bleStrongestRSSI = -999;
 int totalElrsHits = 0;
 int totalWifiHits = 0;
@@ -379,12 +377,10 @@ void log_hit(SignalType type, int rssi, float freq, const char* id, float snr, u
       if (snr > elrsBestSNR) elrsBestSNR = snr;
       break;
     case SIG_WIFI:
-      wifiDetectedCount++;
       totalWifiHits++;
       if (rssi > wifiStrongestRSSI) wifiStrongestRSSI = rssi;
       break;
     case SIG_BLE:
-      bleRemoteIDCount++;
       totalBleHits++;
       if (rssi > bleStrongestRSSI) bleStrongestRSSI = rssi;
       break;
@@ -482,37 +478,116 @@ uint8_t cadChannelHits[80] = {0};
 int cadTotalHits = 0;
 unsigned long cadWindowStart = 0;
 
-// ---- Phase 2: Verification state ----
-enum ElrsScanPhase { PHASE_CAD, PHASE_VERIFY, PHASE_TRACK };
-ElrsScanPhase elrsScanPhase = PHASE_CAD;
-int verifyRateIndex = 0;
-int verifyRatesTried = 0;
-
-// ---- Phase 3: Tracking state ----
+// ---- Multi-signal tracking ----
+#define MAX_TRACK_SLOTS         8     // Max simultaneous ELRS signals to track
 #define TRACK_TIMEOUT_MS        10000  // Release lock after 10s with no packets
 #define TRACK_LOG_FAST_MS       300    // Log interval when signal is strong (RSSI >= -30)
 #define TRACK_LOG_SLOW_MS       3000   // Log interval when signal is weak (RSSI <= -90)
-#define TRACK_CAD_INTERVAL      15     // Do a CAD sweep on alternate band every N track attempts
 
 // Dynamic tracking interval: closer signal = faster updates (and faster beeps)
-// RSSI -90 or worse -> 5000ms, RSSI -30 or better -> 1000ms, linear between
 unsigned long track_log_interval(float rssi) {
   int clamped = constrain((int)rssi, -90, -30);
   return map(clamped, -90, -30, TRACK_LOG_SLOW_MS, TRACK_LOG_FAST_MS);
 }
-const ElrsAirRate* trackRate = NULL;   // Locked rate during tracking
-ElrsBand trackBand = BAND_900;        // Band we're tracking on
-int trackChannels[80];                 // Channel indices with CAD hits at time of lock
-int trackNumChannels = 0;             // Number of active tracking channels
-int trackChIdx = 0;                   // Current index into trackChannels[]
-unsigned long trackLastRx = 0;        // Last successful receive timestamp
-unsigned long trackLastLog = 0;       // Last time we logged a detection
-int trackRxCount = 0;                 // Packets received during this tracking session
-float trackBestRSSI = -999;           // Best RSSI during current log interval
-float trackBestSNR = -999;            // Best SNR during current log interval
-float trackSmoothedRSSI = -999;       // Smoothed RSSI for interval/frequency calc (not reset)
-uint8_t trackLastPktType = 0xFF;      // Last packet type seen while tracking
-int trackCadCounter = 0;              // Counter for interleaved CAD sweeps
+
+struct TrackSlot {
+  bool active;
+  const ElrsAirRate* rate;
+  ElrsBand band;
+  uint8_t channels[80];      // Channel indices (0-79 fits in uint8_t)
+  int numChannels;
+  int chIdx;                  // Current index into channels[]
+  unsigned long lastRx;
+  unsigned long lastLog;
+  int rxCount;
+  float bestRSSI;
+  float bestSNR;
+  float smoothedRSSI;
+  uint8_t lastPktType;
+  uint8_t id;                 // Slot index 0..MAX_TRACK_SLOTS-1
+};
+
+TrackSlot trackSlots[MAX_TRACK_SLOTS];
+int activeTrackCount = 0;
+
+// Scheduler state
+int schedNextSlot = 0;            // Round-robin index (0..activeTrackCount = CAD turn)
+bool verifyPending = false;       // CAD triggered, need to verify a new signal
+int verifyRateIndex = 0;
+int verifyRatesTried = 0;
+ElrsBand verifyBand = BAND_900;   // Band being verified
+uint8_t verifyCadHits[80];        // Saved CAD hits for verify phase
+
+// Lazy radio reconfig tracking
+const ElrsAirRate* radioCurrentRate = NULL;
+ElrsBand radioCurrentBand = BAND_900;
+bool radioInCadMode = true;
+
+// Forward declarations for functions using TrackSlot (prevents Arduino auto-prototype issues)
+void configure_radio_for_slot(TrackSlot* slot);
+TrackSlot* allocate_track_slot();
+TrackSlot* find_duplicate_track(ElrsBand band, const ElrsAirRate* rate);
+void expire_tracks(unsigned long now);
+void clear_all_tracks();
+void run_verify_step(unsigned long now);
+void run_track_step(TrackSlot* slot, unsigned long now);
+void run_cad_step(unsigned long now);
+
+// ============================================================================
+// WIFI TRACKING (lock/track/expire per MAC, analogous to ELRS TrackSlot)
+// ============================================================================
+
+#define MAX_WIFI_TRACKS      8
+#define WIFI_TRACK_TIMEOUT_MS 15000
+#define WIFI_TRACK_LOG_MS     5000
+
+struct WifiTrack {
+  bool     active;
+  uint8_t  mac[6];
+  char     desc[20];
+  float    smoothedRSSI;
+  int      bestRSSI;
+  unsigned long lastSeen;
+  unsigned long lastLog;
+  int      hitCount;
+  uint8_t  id;
+};
+
+WifiTrack wifiTracks[MAX_WIFI_TRACKS];
+int wifiActiveCount = 0;
+
+// Forward declarations
+WifiTrack* find_wifi_track(const uint8_t* mac);
+WifiTrack* alloc_wifi_track();
+void expire_wifi_tracks();
+
+// ============================================================================
+// BLE TRACKING (lock/track/expire per device address)
+// ============================================================================
+
+#define MAX_BLE_TRACKS       8
+#define BLE_TRACK_TIMEOUT_MS 30000
+#define BLE_TRACK_LOG_MS     10000
+
+struct BleTrack {
+  bool     active;
+  char     addr[18];
+  char     desc[20];
+  float    smoothedRSSI;
+  int      bestRSSI;
+  unsigned long lastSeen;
+  unsigned long lastLog;
+  int      hitCount;
+  uint8_t  id;
+};
+
+BleTrack bleTracks[MAX_BLE_TRACKS];
+int bleActiveCount = 0;
+
+// Forward declarations
+BleTrack* find_ble_track(const char* addr);
+BleTrack* alloc_ble_track();
+void expire_ble_tracks();
 
 // ---- Shared state ----
 unsigned long elrsLastReportTime = 0;
@@ -594,246 +669,455 @@ void elrs_top_channels(int* out, int count) {
   }
 }
 
-void cad_scan_task() {
+// ---- Multi-track helper functions ----
+
+// Configure radio for a track slot's rate/band (lazy — skips if already set)
+void configure_radio_for_slot(TrackSlot* slot) {
+  if (slot->rate == radioCurrentRate && slot->band == radioCurrentBand && !radioInCadMode) return;
+  radio->setBandwidth(slot->rate->bw, slot->band == BAND_24);
+  radio->setSpreadingFactor(slot->rate->sf);
+  radio->setCodingRate(slot->rate->cr, slot->rate->crLongInterleave);
+  radio->setSyncWord(0x12);
+  radio->implicitHeader(slot->rate->payloadLen);
+  radio->setCRC(false);
+  radioCurrentRate = slot->rate;
+  radioCurrentBand = slot->band;
+  radioInCadMode = false;
+}
+
+// Find a free track slot, or evict the weakest signal
+TrackSlot* allocate_track_slot() {
+  // First: find an inactive slot
+  for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+    if (!trackSlots[i].active) return &trackSlots[i];
+  }
+  // All full: evict weakest (lowest smoothedRSSI)
+  int weakest = 0;
+  for (int i = 1; i < MAX_TRACK_SLOTS; i++) {
+    if (trackSlots[i].smoothedRSSI < trackSlots[weakest].smoothedRSSI) weakest = i;
+  }
+  TrackSlot* slot = &trackSlots[weakest];
+  // Log eviction
+  char chanStr[32];
+  const char* bandPfx = (slot->band == BAND_900) ? "900 " : "";
+  snprintf(chanStr, sizeof(chanStr), "%s%s/EVICT#%d", bandPfx, slot->rate->name, slot->id);
+  log_hit(SIG_ELRS, (int)slot->bestRSSI, 0, chanStr, slot->bestSNR, slot->lastPktType);
+  Serial.printf("[ELRS] Evicting slot#%d (%s) for new signal\n", slot->id, slot->rate->name);
+  slot->active = false;
+  activeTrackCount--;
+  return slot;
+}
+
+// Check if a signal with this band+rate is already being tracked
+TrackSlot* find_duplicate_track(ElrsBand band, const ElrsAirRate* rate) {
+  for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+    if (trackSlots[i].active && trackSlots[i].band == band && trackSlots[i].rate == rate) {
+      return &trackSlots[i];
+    }
+  }
+  return NULL;
+}
+
+// Expire timed-out track slots
+void expire_tracks(unsigned long now) {
+  for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+    TrackSlot* slot = &trackSlots[i];
+    if (!slot->active) continue;
+    if (now - slot->lastRx >= TRACK_TIMEOUT_MS) {
+      const char* bandName = (slot->band == BAND_900) ? "900" : "2.4G";
+      Serial.printf("[ELRS %s] TRACK#%d: signal lost after %ds, %d pkts total\n",
+                    bandName, slot->id, TRACK_TIMEOUT_MS / 1000, slot->rxCount);
+      if (slot->bestRSSI > -999 && now - slot->lastLog > 1000) {
+        char chanStr[32];
+        const char* bandPfx = (slot->band == BAND_900) ? "900 " : "";
+        snprintf(chanStr, sizeof(chanStr), "%s%s/LOST#%d", bandPfx, slot->rate->name, slot->id);
+        log_hit(SIG_ELRS, (int)slot->bestRSSI, 0, chanStr, slot->bestSNR, slot->lastPktType);
+      }
+      slot->active = false;
+      activeTrackCount--;
+    }
+  }
+}
+
+// Clear all track slots (for sleep/wake)
+void clear_all_tracks() {
+  for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+    trackSlots[i].active = false;
+    trackSlots[i].id = i;
+  }
+  activeTrackCount = 0;
+  verifyPending = false;
+  schedNextSlot = 0;
+  for (int i = 0; i < MAX_WIFI_TRACKS; i++) { wifiTracks[i].active = false; wifiTracks[i].id = i; }
+  wifiActiveCount = 0;
+  for (int i = 0; i < MAX_BLE_TRACKS; i++) { bleTracks[i].active = false; bleTracks[i].id = i; }
+  bleActiveCount = 0;
+}
+
+// ---- WiFi tracking helpers ----
+
+WifiTrack* find_wifi_track(const uint8_t* mac) {
+  for (int i = 0; i < MAX_WIFI_TRACKS; i++) {
+    if (wifiTracks[i].active && memcmp(wifiTracks[i].mac, mac, 6) == 0)
+      return &wifiTracks[i];
+  }
+  return nullptr;
+}
+
+WifiTrack* alloc_wifi_track() {
+  // Find empty slot first
+  for (int i = 0; i < MAX_WIFI_TRACKS; i++) {
+    if (!wifiTracks[i].active) return &wifiTracks[i];
+  }
+  // Evict weakest active slot
+  int weakest = 0;
+  for (int i = 1; i < MAX_WIFI_TRACKS; i++) {
+    if (wifiTracks[i].smoothedRSSI < wifiTracks[weakest].smoothedRSSI) weakest = i;
+  }
+  return &wifiTracks[weakest];
+}
+
+void expire_wifi_tracks() {
   unsigned long now = millis();
+  for (int i = 0; i < MAX_WIFI_TRACKS; i++) {
+    if (!wifiTracks[i].active) continue;
+    if (now - wifiTracks[i].lastSeen > WIFI_TRACK_TIMEOUT_MS) {
+      char id[24];
+      snprintf(id, sizeof(id), "%.12s/LST#%d", wifiTracks[i].desc, wifiTracks[i].id);
+      log_hit(SIG_WIFI, (int)wifiTracks[i].smoothedRSSI, 0, id);
+      wifiTracks[i].active = false;
+      wifiActiveCount--;
+    }
+  }
+}
+
+void wifi_track_hit(int rssi, const char* desc, const uint8_t* mac) {
+  unsigned long now = millis();
+  WifiTrack* t = find_wifi_track(mac);
+  if (!t) {
+    t = alloc_wifi_track();
+    bool wasActive = t->active;
+    t->active = true;
+    memcpy(t->mac, mac, 6);
+    strncpy(t->desc, desc, sizeof(t->desc) - 1);
+    t->desc[sizeof(t->desc) - 1] = '\0';
+    t->smoothedRSSI = rssi;
+    t->bestRSSI = rssi;
+    t->lastSeen = now;
+    t->lastLog = now;
+    t->hitCount = 1;
+    if (!wasActive) wifiActiveCount++;
+    char id[24];
+    snprintf(id, sizeof(id), "%.12s/LCK#%d", t->desc, t->id);
+    log_hit(SIG_WIFI, rssi, 0, id);
+  } else {
+    t->smoothedRSSI = t->smoothedRSSI * 0.8f + rssi * 0.2f;
+    if (rssi > t->bestRSSI) t->bestRSSI = rssi;
+    t->lastSeen = now;
+    t->hitCount++;
+    if (now - t->lastLog >= WIFI_TRACK_LOG_MS) {
+      t->lastLog = now;
+      char id[24];
+      snprintf(id, sizeof(id), "%.12s/TRK#%d", t->desc, t->id);
+      log_hit(SIG_WIFI, (int)t->smoothedRSSI, 0, id);
+    }
+  }
+}
+
+// ---- BLE tracking helpers ----
+
+BleTrack* find_ble_track(const char* addr) {
+  for (int i = 0; i < MAX_BLE_TRACKS; i++) {
+    if (bleTracks[i].active && strncmp(bleTracks[i].addr, addr, 17) == 0)
+      return &bleTracks[i];
+  }
+  return nullptr;
+}
+
+BleTrack* alloc_ble_track() {
+  for (int i = 0; i < MAX_BLE_TRACKS; i++) {
+    if (!bleTracks[i].active) return &bleTracks[i];
+  }
+  int weakest = 0;
+  for (int i = 1; i < MAX_BLE_TRACKS; i++) {
+    if (bleTracks[i].smoothedRSSI < bleTracks[weakest].smoothedRSSI) weakest = i;
+  }
+  return &bleTracks[weakest];
+}
+
+void expire_ble_tracks() {
+  unsigned long now = millis();
+  for (int i = 0; i < MAX_BLE_TRACKS; i++) {
+    if (!bleTracks[i].active) continue;
+    if (now - bleTracks[i].lastSeen > BLE_TRACK_TIMEOUT_MS) {
+      char id[24];
+      snprintf(id, sizeof(id), "%.12s/LST#%d", bleTracks[i].desc, bleTracks[i].id);
+      log_hit(SIG_BLE, (int)bleTracks[i].smoothedRSSI, 0, id);
+      bleTracks[i].active = false;
+      bleActiveCount--;
+    }
+  }
+}
+
+void ble_track_hit(int rssi, const char* desc, const char* addr) {
+  unsigned long now = millis();
+  BleTrack* t = find_ble_track(addr);
+  if (!t) {
+    t = alloc_ble_track();
+    bool wasActive = t->active;
+    t->active = true;
+    strncpy(t->addr, addr, sizeof(t->addr) - 1);
+    t->addr[sizeof(t->addr) - 1] = '\0';
+    strncpy(t->desc, desc, sizeof(t->desc) - 1);
+    t->desc[sizeof(t->desc) - 1] = '\0';
+    t->smoothedRSSI = rssi;
+    t->bestRSSI = rssi;
+    t->lastSeen = now;
+    t->lastLog = now;
+    t->hitCount = 1;
+    if (!wasActive) bleActiveCount++;
+    char id[24];
+    snprintf(id, sizeof(id), "%.12s/LCK#%d", t->desc, t->id);
+    log_hit(SIG_BLE, rssi, 0, id);
+  } else {
+    t->smoothedRSSI = t->smoothedRSSI * 0.8f + rssi * 0.2f;
+    if (rssi > t->bestRSSI) t->bestRSSI = rssi;
+    t->lastSeen = now;
+    t->hitCount++;
+    if (now - t->lastLog >= BLE_TRACK_LOG_MS) {
+      t->lastLog = now;
+      char id[24];
+      snprintf(id, sizeof(id), "%.12s/TRK#%d", t->desc, t->id);
+      log_hit(SIG_BLE, (int)t->smoothedRSSI, 0, id);
+    }
+  }
+}
+
+// Run one verify attempt (tries one rate on top 3 channels)
+void run_verify_step(unsigned long now) {
+  // Set band for helper functions (elrs_num_rates, elrs_freq_table, etc.)
+  elrsCurrentBand = verifyBand;
+
+  int numRates = elrs_num_rates();
+  const ElrsAirRate* rates = elrs_rates();
   int numChannels = elrs_num_channels();
   const float* freqTable = elrs_freq_table();
 
-  // ==== PHASE 2: Implicit header receive verification ====
-  if (elrsScanPhase == PHASE_VERIFY) {
-    int numRates = elrs_num_rates();
-    const ElrsAirRate* rates = elrs_rates();
+  if (verifyRatesTried >= numRates) {
+    Serial.printf("[ELRS %s] Verify: no ELRS packet confirmed\n", elrs_band_name());
+    elrs_reset_window();
+    elrs_switch_band();  // Sets elrsCurrentBand to next CAD band
+    verifyPending = false;
+    return;
+  }
 
-    if (verifyRatesTried >= numRates) {
-      Serial.printf("[ELRS %s] Verify: no ELRS packet confirmed\n", elrs_band_name());
+  int rateIdx = verifyRateIndex % numRates;
+  const ElrsAirRate* rate = &rates[rateIdx];
+
+  // Configure radio for this exact ELRS mode
+  radio->setBandwidth(rate->bw, verifyBand == BAND_24);
+  radio->setSpreadingFactor(rate->sf);
+  radio->setCodingRate(rate->cr, rate->crLongInterleave);
+  radio->setSyncWord(0x12);
+  radio->implicitHeader(rate->payloadLen);
+  radio->setCRC(false);
+  radioInCadMode = false;
+  radioCurrentRate = rate;
+  radioCurrentBand = verifyBand;
+
+  // Find top 3 channels from saved CAD hits
+  int hotCh[3] = {-1, -1, -1};
+  for (int n = 0; n < 3; n++) {
+    int best = -1;
+    for (int i = 0; i < numChannels; i++) {
+      if (verifyCadHits[i] == 0) continue;
+      bool skip = false;
+      for (int j = 0; j < n; j++) {
+        if (hotCh[j] == i) { skip = true; break; }
+      }
+      if (skip) continue;
+      if (best < 0 || verifyCadHits[i] > verifyCadHits[best]) best = i;
+    }
+    hotCh[n] = best;
+  }
+
+  Serial.printf("[ELRS %s] Verify %s (BW%d/SF%d/%dB): ",
+                elrs_band_name(), rate->name, (int)rate->bw, rate->sf, rate->payloadLen);
+
+  uint8_t rxBuf[16];
+  bool received = false;
+  float rxRssi = 0;
+  float rxSnr = 0;
+  float rxFreq = 0;
+  uint8_t rxPktType = 0;
+
+  for (int c = 0; c < 3; c++) {
+    if (hotCh[c] < 0) continue;
+    float freq = freqTable[hotCh[c]];
+    radio->setFrequency(freq);
+
+    int state = radio->receive(rxBuf, rate->payloadLen, 100);
+
+    if (state == RADIOLIB_ERR_NONE) {
+      rxPktType = (rxBuf[0] >> 6) & 0x03;
+      rxRssi = radio->getRSSI();
+      rxSnr = radio->getSNR();
+      rxFreq = freq;
+      received = true;
+      Serial.printf("ch%d/%.1f PACKET %dB type=%d RSSI:%.0f SNR:%.1f\n",
+                    hotCh[c], freq, rate->payloadLen, rxPktType, rxRssi, rxSnr);
+      break;
+    } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
+      Serial.printf("ch%d err=%d ", hotCh[c], state);
+    }
+  }
+
+  if (received) {
+    lastElrsDetectedRate = rate->name;
+    lastElrsPktType = rxPktType;
+    elrsLastReportTime = now;
+
+    int activeCh = 0;
+    for (int i = 0; i < numChannels; i++) {
+      if (verifyCadHits[i] > 0) activeCh++;
+    }
+
+    Serial.printf("[ELRS %s] CONFIRMED %s (%s): RSSI %.0f, SNR %.1f, %d ch active -> TRACKING\n",
+                  elrs_band_name(), rate->name, elrs_pkt_type_name(rxPktType), rxRssi, rxSnr, activeCh);
+
+    if (!elrs_pkt_type_allowed(rxPktType)) {
+      Serial.printf("[ELRS] Packet type %s filtered out, skipping\n", elrs_pkt_type_name(rxPktType));
       elrs_reset_window();
-      elrs_switch_band();  // Switch bands after verify so 900MHz doesn't starve 2.4GHz
-      elrsScanPhase = PHASE_CAD;
+      elrs_switch_band();
+      verifyPending = false;
       return;
     }
 
-    int rateIdx = verifyRateIndex % numRates;
-    const ElrsAirRate* rate = &rates[rateIdx];
+    // Check for duplicate — if same band+rate already tracked, refresh it
+    TrackSlot* existing = find_duplicate_track(verifyBand, rate);
+    if (existing) {
+      Serial.printf("[ELRS] Refreshing existing slot#%d for %s\n", existing->id, rate->name);
+      existing->lastRx = now;
+      // Update channels from new CAD data
+      existing->numChannels = 0;
+      for (int i = 0; i < numChannels && existing->numChannels < 80; i++) {
+        if (verifyCadHits[i] > 0) existing->channels[existing->numChannels++] = (uint8_t)i;
+      }
+    } else {
+      // Allocate new track slot
+      TrackSlot* slot = allocate_track_slot();
+      slot->active = true;
+      slot->rate = rate;
+      slot->band = verifyBand;
+      slot->numChannels = 0;
+      for (int i = 0; i < numChannels && slot->numChannels < 80; i++) {
+        if (verifyCadHits[i] > 0) slot->channels[slot->numChannels++] = (uint8_t)i;
+      }
+      slot->chIdx = 0;
+      slot->lastRx = now;
+      slot->lastLog = now;
+      slot->rxCount = 1;
+      slot->bestRSSI = rxRssi;
+      slot->bestSNR = rxSnr;
+      slot->smoothedRSSI = rxRssi;
+      slot->lastPktType = rxPktType;
+      activeTrackCount++;
 
-    // Configure radio for this exact ELRS mode
-    radio->setBandwidth(rate->bw, elrsCurrentBand == BAND_24);
-    radio->setSpreadingFactor(rate->sf);
-    radio->setCodingRate(rate->cr, rate->crLongInterleave);
-    radio->setSyncWord(0x12);
-    radio->implicitHeader(rate->payloadLen);
-    radio->setCRC(false);
+      Serial.printf("[ELRS] Allocated slot#%d for %s %s\n", slot->id,
+                    (verifyBand == BAND_900) ? "900" : "2.4G", rate->name);
+    }
 
-    // Listen on top 3 channels from CAD phase
-    int hotCh[3];
-    elrs_top_channels(hotCh, 3);
+    // Log initial detection
+    char chanStr[32];
+    const char* bandPfx = (verifyBand == BAND_900) ? "900 " : "";
+    TrackSlot* logSlot = existing ? existing : find_duplicate_track(verifyBand, rate);
+    snprintf(chanStr, sizeof(chanStr), "%s%s/%dch#%d", bandPfx, rate->name, activeCh, logSlot->id);
+    log_hit(SIG_ELRS, (int)rxRssi, rxFreq, chanStr, rxSnr, rxPktType);
 
-    Serial.printf("[ELRS %s] Verify %s (BW%d/SF%d/%dB): ",
-                  elrs_band_name(), rate->name, (int)rate->bw, rate->sf, rate->payloadLen);
+    elrs_reset_window();
+    elrs_switch_band();  // Sets elrsCurrentBand to next CAD band
+    verifyPending = false;
+    return;
+  }
+
+  Serial.println("no packet");
+  verifyRateIndex++;
+  verifyRatesTried++;
+  // elrsCurrentBand stays as verifyBand for next verify iteration
+}
+
+// Run one tracking iteration for a slot (3 channels x 20ms)
+void run_track_step(TrackSlot* slot, unsigned long now) {
+  if (slot->numChannels == 0) {
+    slot->active = false;
+    activeTrackCount--;
+    return;
+  }
+
+  configure_radio_for_slot(slot);
+
+  const float* tFreqTable = (slot->band == BAND_900) ? ELRS_FREQ_TABLE : ELRS_24_FREQ_TABLE;
+
+  for (int attempt = 0; attempt < 3; attempt++) {
+    int ch = slot->channels[slot->chIdx % slot->numChannels];
+    slot->chIdx++;
+    float freq = tFreqTable[ch];
+    radio->setFrequency(freq);
 
     uint8_t rxBuf[16];
-    bool received = false;
-    float rxRssi = 0;
-    float rxSnr = 0;
-    float rxFreq = 0;
-    uint8_t rxPktType = 0;
+    int state = radio->receive(rxBuf, slot->rate->payloadLen, 20);
 
-    for (int c = 0; c < 3; c++) {
-      if (hotCh[c] < 0) continue;
-      float freq = freqTable[hotCh[c]];
-      radio->setFrequency(freq);
+    if (state == RADIOLIB_ERR_NONE) {
+      uint8_t pktType = (rxBuf[0] >> 6) & 0x03;
+      float rssi = radio->getRSSI();
+      float snr = radio->getSNR();
 
-      int state = radio->receive(rxBuf, rate->payloadLen, 100);
+      slot->lastRx = now;
+      slot->rxCount++;
+      slot->lastPktType = pktType;
+      lastElrsPktType = pktType;
+      if (rssi > slot->bestRSSI) slot->bestRSSI = rssi;
+      if (snr > slot->bestSNR) slot->bestSNR = snr;
+      slot->smoothedRSSI = (slot->smoothedRSSI < -900) ? rssi : (0.3f * rssi + 0.7f * slot->smoothedRSSI);
 
-      if (state == RADIOLIB_ERR_NONE) {
-        // ELRS packet type: top 2 bits of byte 0 (0=RC, 1=MSP, 2=SYNC, 3=TLM)
-        rxPktType = (rxBuf[0] >> 6) & 0x03;
-        rxRssi = radio->getRSSI();
-        rxSnr = radio->getSNR();
-        rxFreq = freq;
-        received = true;
-        Serial.printf("ch%d/%.1f PACKET %dB type=%d RSSI:%.0f SNR:%.1f\n",
-                      hotCh[c], freq, rate->payloadLen, rxPktType, rxRssi, rxSnr);
-        break;
-      } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
-        Serial.printf("ch%d err=%d ", hotCh[c], state);
-      }
-    }
+      // Update global display stats
+      if ((int)rssi > elrsStrongestRSSI) elrsStrongestRSSI = (int)rssi;
+      if (snr > elrsBestSNR) elrsBestSNR = snr;
 
-    if (received) {
-      // === CONFIRMED ELRS — enter tracking mode ===
-      lastElrsDetectedRate = rate->name;
-      lastElrsPktType = rxPktType;
-      elrsLastReportTime = now;
-
-      int activeChannels = 0;
-      for (int i = 0; i < numChannels; i++) {
-        if (cadChannelHits[i] > 0) activeChannels++;
-      }
-
-      Serial.printf("[ELRS %s] CONFIRMED %s (%s): RSSI %.0f, SNR %.1f, %d ch active -> TRACKING\n",
-                    elrs_band_name(), rate->name, elrs_pkt_type_name(rxPktType), rxRssi, rxSnr, activeChannels);
-
-      // Check if this packet type is allowed by filter
-      if (!elrs_pkt_type_allowed(rxPktType)) {
-        Serial.printf("[ELRS] Packet type %s filtered out, skipping\n", elrs_pkt_type_name(rxPktType));
-        elrs_reset_window();
-        elrs_switch_band();
-        elrsScanPhase = PHASE_CAD;
-        return;
-      }
-
-      // Log initial detection
-      char chanStr[32];
-      const char* bandPfx = (elrsCurrentBand == BAND_900) ? "900 " : "";
-      snprintf(chanStr, sizeof(chanStr), "%s%s/%dch", bandPfx, rate->name, activeChannels);
-      log_hit(SIG_ELRS, (int)rxRssi, rxFreq, chanStr, rxSnr, rxPktType);
-
-      // Set up tracking state
-      trackRate = rate;
-      trackBand = elrsCurrentBand;
-      trackNumChannels = 0;
-      for (int i = 0; i < numChannels && trackNumChannels < 80; i++) {
-        if (cadChannelHits[i] > 0) {
-          trackChannels[trackNumChannels++] = i;
+      // Periodic log entry (interval scales with smoothed RSSI)
+      unsigned long logInterval = track_log_interval(slot->smoothedRSSI);
+      if (now - slot->lastLog >= logInterval) {
+        if (elrs_pkt_type_allowed(pktType)) {
+          char chanStr[32];
+          const char* bandPfx = (slot->band == BAND_900) ? "900 " : "";
+          snprintf(chanStr, sizeof(chanStr), "%s%s/TRK#%d", bandPfx, slot->rate->name, slot->id);
+          log_hit(SIG_ELRS, (int)slot->bestRSSI, freq, chanStr, slot->bestSNR, pktType);
+          elrsLastReportTime = now;
         }
+        slot->lastLog = now;
+        slot->bestRSSI = -999;
+        slot->bestSNR = -999;
+        const char* bandName = (slot->band == BAND_900) ? "900" : "2.4G";
+        Serial.printf("[ELRS %s] TRACK#%d: %s %d pkts, RSSI %.0f SNR %.1f [%lums]\n",
+                      bandName, slot->id, slot->rate->name, slot->rxCount, rssi, snr, logInterval);
       }
-      trackChIdx = 0;
-      trackLastRx = now;
-      trackLastLog = now;
-      trackRxCount = 1;
-      trackBestRSSI = rxRssi;
-      trackBestSNR = rxSnr;
-      trackSmoothedRSSI = rxRssi;
-      trackLastPktType = rxPktType;
-      trackCadCounter = 0;
-
-      elrsScanPhase = PHASE_TRACK;
-      return;
+      break;  // Got a packet, done for this iteration
     }
-
-    Serial.println("no packet");
-    verifyRateIndex++;
-    verifyRatesTried++;
-    return;
   }
+}
 
-  // ==== PHASE 3: Track locked signal ====
-  if (elrsScanPhase == PHASE_TRACK) {
-    // Check timeout — signal lost
-    if (now - trackLastRx >= TRACK_TIMEOUT_MS) {
-      Serial.printf("[ELRS %s] TRACK: signal lost after %ds, %d pkts total\n",
-                    elrs_band_name(), TRACK_TIMEOUT_MS / 1000, trackRxCount);
-      // Log final update if we have pending data
-      if (trackBestRSSI > -999 && now - trackLastLog > 1000) {
-        char chanStr[32];
-        const char* bandPfx = (trackBand == BAND_900) ? "900 " : "";
-        snprintf(chanStr, sizeof(chanStr), "%s%s/LOST", bandPfx, trackRate->name);
-        log_hit(SIG_ELRS, (int)trackBestRSSI, 0, chanStr, trackBestSNR, trackLastPktType);
-      }
-      elrs_reset_window();
-      elrs_switch_band();
-      elrsScanPhase = PHASE_CAD;
-      return;
-    }
+// Run one CAD scanning step (one channel)
+void run_cad_step(unsigned long now) {
+  int numChannels = elrs_num_channels();
+  const float* freqTable = elrs_freq_table();
 
-    // Periodically do a quick CAD sweep on the OTHER band so we don't miss new signals
-    trackCadCounter++;
-    if (trackCadCounter >= TRACK_CAD_INTERVAL) {
-      trackCadCounter = 0;
-      // Quick CAD: switch to other band, scan a few channels, switch back
-      ElrsBand otherBand = (trackBand == BAND_900) ? BAND_24 : BAND_900;
-      elrsCurrentBand = otherBand;
-      elrs_restore_cad_config();
-
-      const float* otherFreqTable = elrs_freq_table();
-      int otherNumCh = elrs_num_channels();
-      // Scan 8 random channels on the other band
-      int cadHits = 0;
-      for (int i = 0; i < 8 && i < otherNumCh; i++) {
-        int ch = random(0, otherNumCh);
-        radio->setFrequency(otherFreqTable[ch]);
-        if (radio->scanChannel() == RADIOLIB_LORA_DETECTED) {
-          cadHits++;
-        }
-      }
-      if (cadHits >= 2) {
-        Serial.printf("[ELRS] TRACK: %d CAD hits on %s band — noted\n", cadHits,
-                      otherBand == BAND_900 ? "900" : "2.4G");
-      }
-
-      // Switch back to tracking band and restore tracking rate config
-      elrsCurrentBand = trackBand;
-      radio->setBandwidth(trackRate->bw, trackBand == BAND_24);
-      radio->setSpreadingFactor(trackRate->sf);
-      radio->setCodingRate(trackRate->cr, trackRate->crLongInterleave);
-      radio->setSyncWord(0x12);
-      radio->implicitHeader(trackRate->payloadLen);
-      radio->setCRC(false);
-      return;  // Spent this iteration on CAD, try receive next time
-    }
-
-    // Normal tracking: quick receive on next active channel
-    if (trackNumChannels == 0) {
-      // Shouldn't happen, but bail
-      elrs_reset_window();
-      elrs_switch_band();
-      elrsScanPhase = PHASE_CAD;
-      return;
-    }
-
-    // Try up to 3 channels per iteration with short timeouts for faster tracking
-    const float* tFreqTable = (trackBand == BAND_900) ? ELRS_FREQ_TABLE : ELRS_24_FREQ_TABLE;
-
-    for (int attempt = 0; attempt < 3; attempt++) {
-      int ch = trackChannels[trackChIdx % trackNumChannels];
-      trackChIdx++;
-      float freq = tFreqTable[ch];
-      radio->setFrequency(freq);
-
-      uint8_t rxBuf[16];
-      int state = radio->receive(rxBuf, trackRate->payloadLen, 20);  // 20ms timeout per channel
-
-      if (state == RADIOLIB_ERR_NONE) {
-        uint8_t pktType = (rxBuf[0] >> 6) & 0x03;
-        float rssi = radio->getRSSI();
-        float snr = radio->getSNR();
-
-        trackLastRx = now;
-        trackRxCount++;
-        trackLastPktType = pktType;
-        lastElrsPktType = pktType;
-        if (rssi > trackBestRSSI) trackBestRSSI = rssi;
-        if (snr > trackBestSNR) trackBestSNR = snr;
-        // Exponential moving average: 30% new, 70% old — smooths jitter
-        trackSmoothedRSSI = (trackSmoothedRSSI < -900) ? rssi : (0.3f * rssi + 0.7f * trackSmoothedRSSI);
-
-        // Update global display stats
-        if ((int)rssi > elrsStrongestRSSI) elrsStrongestRSSI = (int)rssi;
-        if (snr > elrsBestSNR) elrsBestSNR = snr;
-
-        // Periodic log entry while tracking (interval scales with smoothed RSSI)
-        unsigned long logInterval = track_log_interval(trackSmoothedRSSI);
-        if (now - trackLastLog >= logInterval) {
-          if (elrs_pkt_type_allowed(pktType)) {
-            char chanStr[32];
-            const char* bandPfx = (trackBand == BAND_900) ? "900 " : "";
-            snprintf(chanStr, sizeof(chanStr), "%s%s/TRK", bandPfx, trackRate->name);
-            log_hit(SIG_ELRS, (int)trackBestRSSI, freq, chanStr, trackBestSNR, pktType);
-            elrsLastReportTime = now;
-          }
-          trackLastLog = now;
-          trackBestRSSI = -999;
-          trackBestSNR = -999;
-          Serial.printf("[ELRS %s] TRACK: %s %d pkts, RSSI %.0f SNR %.1f [%lums]\n",
-                        elrs_band_name(), trackRate->name, trackRxCount, rssi, snr, logInterval);
-        }
-        break;  // Got a packet, done for this iteration
-      }
-    }
-    return;
+  // Ensure radio is in CAD mode
+  if (!radioInCadMode || radioCurrentBand != elrsCurrentBand) {
+    elrs_restore_cad_config();
+    radioInCadMode = true;
+    radioCurrentBand = elrsCurrentBand;
+    radioCurrentRate = NULL;
   }
-
-  // ==== PHASE 1: CAD sweep ====
 
   // Evaluate window when it expires
   if (cadWindowStart > 0 && now - cadWindowStart >= CAD_WINDOW_MS) {
@@ -848,7 +1132,10 @@ void cad_scan_task() {
       Serial.printf("[ELRS %s] CAD: %d hits, %d ch -> verifying\n",
                     elrs_band_name(), cadTotalHits, activeChannels);
 
-      elrsScanPhase = PHASE_VERIFY;
+      // Save CAD hits for verify phase
+      verifyPending = true;
+      verifyBand = elrsCurrentBand;
+      memcpy(verifyCadHits, cadChannelHits, sizeof(verifyCadHits));
       verifyRateIndex = 0;
       verifyRatesTried = 0;
       return;
@@ -858,9 +1145,22 @@ void cad_scan_task() {
                   elrs_band_name(), cadTotalHits, activeChannels,
                   triggered ? " (cooldown)" : "");
 
-    // Window done — switch bands for next window
+    // Window done — pick next band (prefer under-covered band)
     elrs_reset_window();
-    elrs_switch_band();
+    int tracks900 = 0, tracks24 = 0;
+    for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+      if (!trackSlots[i].active) continue;
+      if (trackSlots[i].band == BAND_900) tracks900++;
+      else tracks24++;
+    }
+    if (tracks900 > tracks24) elrsCurrentBand = BAND_24;
+    else if (tracks24 > tracks900) elrsCurrentBand = BAND_900;
+    else elrsCurrentBand = (elrsCurrentBand == BAND_900) ? BAND_24 : BAND_900;
+    cadChannelIndex = 0;
+    elrs_restore_cad_config();
+    radioInCadMode = true;
+    radioCurrentBand = elrsCurrentBand;
+    radioCurrentRate = NULL;
     return;
   }
 
@@ -868,7 +1168,7 @@ void cad_scan_task() {
     cadWindowStart = now;
   }
 
-  // One channel per loop iteration - wrap at end of FHSS table
+  // One channel per loop iteration
   if (cadChannelIndex >= numChannels) {
     cadChannelIndex = 0;
     return;
@@ -892,6 +1192,43 @@ void cad_scan_task() {
   cadChannelIndex++;
 }
 
+// ---- Main ELRS scheduler: round-robin across active tracks + CAD ----
+void cad_scan_task() {
+  unsigned long now = millis();
+
+  // 1. Expire timed-out tracks
+  expire_tracks(now);
+
+  // 2. If verify is pending, run one verify attempt
+  if (verifyPending) {
+    run_verify_step(now);
+    return;
+  }
+
+  // 3. If no active tracks, just run CAD
+  if (activeTrackCount == 0) {
+    run_cad_step(now);
+    return;
+  }
+
+  // 4. Build list of active slot indices
+  int activeSlots[MAX_TRACK_SLOTS];
+  int n = 0;
+  for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+    if (trackSlots[i].active) activeSlots[n++] = i;
+  }
+
+  // 5. Round-robin: n track turns then 1 CAD turn
+  if (schedNextSlot >= n) {
+    // CAD's turn
+    run_cad_step(now);
+    schedNextSlot = 0;
+  } else {
+    run_track_step(&trackSlots[activeSlots[schedNextSlot]], now);
+    schedNextSlot++;
+  }
+}
+
 // ============================================================================
 // WIFI SCAN - Promiscuous mode for DJI Remote ID / WiFi NaN beacons
 // ============================================================================
@@ -908,44 +1245,32 @@ void wifi_sniffer_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
   if (len < 24) return;
 
   // Frame control field
-  uint8_t frameType = (frame[0] >> 2) & 0x03;    // Type
-  uint8_t frameSubtype = (frame[0] >> 4) & 0x0F; // Subtype
+  uint8_t frameType    = (frame[0] >> 2) & 0x03;
+  uint8_t frameSubtype = (frame[0] >> 4) & 0x0F;
 
-  // Check for beacon frames (type=0, subtype=8) and probe responses (type=0, subtype=5)
-  // Also check for action frames (type=0, subtype=13) which WiFi NaN uses
   if (frameType != 0) return;
+
+  const uint8_t* src = &frame[10];  // source MAC
 
   if (frameSubtype == 8 || frameSubtype == 5) {
     // Beacon or probe response - extract SSID
-    // Fixed parameters are 12 bytes after the 24-byte MAC header
     int pos = 36;  // 24 (MAC header) + 12 (fixed params)
 
-    if (pos + 2 > len) return;
-
-    // First tagged parameter should be SSID (tag 0)
-    if (frame[pos] == 0) {
+    if (pos + 2 <= len && frame[pos] == 0) {
       int ssidLen = frame[pos + 1];
       if (ssidLen > 0 && ssidLen <= 32 && pos + 2 + ssidLen <= len) {
         char ssid[33] = {0};
         memcpy(ssid, &frame[pos + 2], ssidLen);
 
-        // Look for DJI-related SSIDs or any drone-like identifiers
-        // DJI drones broadcast SSIDs like "DJI-XXXXXXXX" or contain Remote ID
         if (strstr(ssid, "DJI") || strstr(ssid, "drone") || strstr(ssid, "DRONE") ||
             strstr(ssid, "Skydio") || strstr(ssid, "Autel") || strstr(ssid, "FIMI")) {
-          // Format MAC address
-          char macStr[18];
-          snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-            frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
-
-          Serial.printf("[WiFi] SSID: %s  MAC: %s  RSSI: %d\n", ssid, macStr, rssi);
-          log_hit(SIG_WIFI, rssi, 0, ssid);
+          Serial.printf("[WiFi] SSID: %s  RSSI: %d\n", ssid, rssi);
+          wifi_track_hit(rssi, ssid, src);
         }
       }
     }
 
-    // Also scan for WiFi NaN / Remote ID Vendor Specific elements (tag 221)
-    // Walk through all tagged parameters looking for ASTM Remote ID
+    // Walk tagged parameters for Vendor Specific Remote ID (tag 221)
     pos = 36;
     while (pos + 2 < len) {
       uint8_t tagNum = frame[pos];
@@ -956,48 +1281,27 @@ void wifi_sniffer_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
         const uint8_t* data = &frame[pos + 2];
         const char* ridType = NULL;
 
-        // ASTM F3411 / ASD-STAN standard Remote ID
-        if (data[0] == 0xFA && data[1] == 0x0B && data[2] == 0xBC)
-          ridType = "ASTM-RID";
-        // DJI Proprietary DroneID (OUI 26:37:12)
-        else if (data[0] == 0x26 && data[1] == 0x37 && data[2] == 0x12)
-          ridType = "DJI-RID";
-        // French DRI (FRDID)
-        else if (data[0] == 0x6A && data[1] == 0x5C && data[2] == 0x35)
-          ridType = "FR-RID";
-        // Parrot SA
-        else if (data[0] == 0x90 && data[1] == 0x3A && data[2] == 0xE6)
-          ridType = "Parrot";
-        // WiFi Alliance NaN in beacon
-        else if (data[0] == 0x50 && data[1] == 0x6F && data[2] == 0x9A && data[3] == 0x13)
-          ridType = "NaN-RID";
+        if      (data[0] == 0xFA && data[1] == 0x0B && data[2] == 0xBC) ridType = "ASTM-RID";
+        else if (data[0] == 0x26 && data[1] == 0x37 && data[2] == 0x12) ridType = "DJI-RID";
+        else if (data[0] == 0x6A && data[1] == 0x5C && data[2] == 0x35) ridType = "FR-RID";
+        else if (data[0] == 0x90 && data[1] == 0x3A && data[2] == 0xE6) ridType = "Parrot";
+        else if (data[0] == 0x50 && data[1] == 0x6F && data[2] == 0x9A && data[3] == 0x13) ridType = "NaN-RID";
 
         if (ridType) {
-          char macStr[18];
-          snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-            frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
-          char desc[40];
-          snprintf(desc, sizeof(desc), "%s %s", ridType, macStr);
-          Serial.printf("[WiFi] %s detected MAC: %s RSSI: %d\n", ridType, macStr, rssi);
-          log_hit(SIG_WIFI, rssi, 0, desc);
+          Serial.printf("[WiFi] %s RSSI: %d\n", ridType, rssi);
+          wifi_track_hit(rssi, ridType, src);
         }
       }
       pos += 2 + tagLen;
     }
   }
 
-  // WiFi NaN Action frames (subtype 13)
-  // NaN Remote ID uses dest MAC 51:6F:9A:01:00:00
+  // WiFi NaN Action frames (subtype 13) — dest MAC 51:6F:9A:01:00:00
   if (frameSubtype == 13 && len > 30) {
     if (frame[4] == 0x51 && frame[5] == 0x6F && frame[6] == 0x9A &&
         frame[7] == 0x01 && frame[8] == 0x00 && frame[9] == 0x00) {
-      char macStr[18];
-      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-        frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
-      Serial.printf("[WiFi] NaN Remote ID action frame MAC: %s RSSI: %d\n", macStr, rssi);
-      char desc[40];
-      snprintf(desc, sizeof(desc), "NaN-RID %s", macStr);
-      log_hit(SIG_WIFI, rssi, 0, desc);
+      Serial.printf("[WiFi] NaN-RID action frame RSSI: %d\n", rssi);
+      wifi_track_hit(rssi, "NaN-RID", src);
     }
   }
 }
@@ -1010,6 +1314,7 @@ int wifiHopIndex = 0;
 void wifi_scan_task() {
   esp_wifi_set_channel(WIFI_HOP_SEQ[wifiHopIndex], WIFI_SECOND_CHAN_NONE);
   wifiHopIndex = (wifiHopIndex + 1) % WIFI_HOP_LEN;
+  expire_wifi_tracks();
 }
 
 void wifi_start() {
@@ -1076,6 +1381,8 @@ class ODIDAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) override {
     bleAdvCount++;
     int rssi = advertisedDevice.getRSSI();
+    String addrStr = advertisedDevice.getAddress().toString();
+    const char* addr = addrStr.c_str();
 
     // Get raw advertisement payload
     uint8_t* payload = advertisedDevice.getPayload();
@@ -1094,47 +1401,38 @@ class ODIDAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         uint16_t uuid = payload[pos + 2] | (payload[pos + 3] << 8);
 
         if (uuid == ODID_SERVICE_UUID) {
-          // Check application code
           if (payload[pos + 4] == ODID_APP_CODE && adLen >= 29) {
-            // pos+5 = counter byte, pos+6..pos+30 = 25-byte ODID message
             const uint8_t* msg = &payload[pos + 6];
             uint8_t msgType = (msg[0] >> 4) & 0x0F;
 
             ODIDData odid = {};
+            char desc[20];
 
             switch (msgType) {
               case ODID_MSG_BASIC_ID:
                 parse_odid_basic_id(msg, &odid);
                 Serial.printf("[BLE] OpenDroneID Basic ID: %s RSSI: %d\n", odid.droneId, rssi);
-                log_hit(SIG_BLE, rssi, 0, odid.droneId);
+                strncpy(desc, odid.droneId, sizeof(desc) - 1);
+                desc[sizeof(desc) - 1] = '\0';
                 break;
-
               case ODID_MSG_LOCATION:
                 parse_odid_location(msg, &odid);
-                Serial.printf("[BLE] OpenDroneID Location: %.6f, %.6f alt=%.1fm RSSI: %d\n",
-                  odid.droneLat, odid.droneLng, odid.droneAlt, rssi);
-                {
-                  char locStr[24];
-                  snprintf(locStr, sizeof(locStr), "%.4f,%.4f", odid.droneLat, odid.droneLng);
-                  log_hit(SIG_BLE, rssi, 0, locStr);
-                }
+                Serial.printf("[BLE] OpenDroneID Location: %.6f, %.6f RSSI: %d\n",
+                  odid.droneLat, odid.droneLng, rssi);
+                snprintf(desc, sizeof(desc), "%.4f,%.4f", odid.droneLat, odid.droneLng);
                 break;
-
               case ODID_MSG_OPERATOR:
                 parse_odid_operator_id(msg, &odid);
                 Serial.printf("[BLE] OpenDroneID Operator: %s RSSI: %d\n", odid.operatorId, rssi);
-                log_hit(SIG_BLE, rssi, 0, odid.operatorId);
+                strncpy(desc, odid.operatorId, sizeof(desc) - 1);
+                desc[sizeof(desc) - 1] = '\0';
                 break;
-
               default:
-                // System, Auth, Self ID, Message Pack - log generically
-                {
-                  char typeStr[16];
-                  snprintf(typeStr, sizeof(typeStr), "ODID-type%d", msgType);
-                  log_hit(SIG_BLE, rssi, 0, typeStr);
-                }
+                snprintf(desc, sizeof(desc), "ODID-type%d", msgType);
                 break;
             }
+
+            ble_track_hit(rssi, desc, addr);
           }
         }
       }
@@ -1151,13 +1449,16 @@ unsigned long bleScanStartTime = 0;
 void bleScanComplete(BLEScanResults scanResults) {
   bleScanRunning = false;
   Serial.printf("[BLE] Scan complete, %d adverts received\n", bleAdvCount);
+  expire_ble_tracks();
   // Re-enable WiFi promiscuous after BLE scan
   if (settings.wifiScanEnabled) esp_wifi_set_promiscuous(true);
 }
 
 void ble_scan_task() {
   // Skip BLE scans during close ELRS tracking — BLE blocks for 1s and kills tracking rate
-  if (elrsScanPhase == PHASE_TRACK && trackSmoothedRSSI > -60) return;
+  for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+    if (trackSlots[i].active && trackSlots[i].smoothedRSSI > -60) return;
+  }
 
   if (bleScanRunning) {
     // Safety timeout - if scan hasn't completed in 2x expected time, reset
@@ -1535,7 +1836,7 @@ void display_page_summary() {
   // Detection counts with badges and RSSI
   display.setCursor(UI_CONTENT_X, y);
   display.print("ELRS");
-  snprintf(_lineBuf, sizeof(_lineBuf), "%d", totalElrsHits);
+  snprintf(_lineBuf, sizeof(_lineBuf), "%d", activeTrackCount);
   ui_draw_badge(UI_CONTENT_X + 36, y, _lineBuf);
   if (lastElrsDetectedRate != NULL) {
     display.setCursor(UI_CONTENT_X + 36 + 30, y);
@@ -1559,7 +1860,7 @@ void display_page_summary() {
 
   display.setCursor(UI_CONTENT_X, y);
   display.print("WiFi");
-  snprintf(_lineBuf, sizeof(_lineBuf), "%d", totalWifiHits);
+  snprintf(_lineBuf, sizeof(_lineBuf), "%d", wifiActiveCount);
   ui_draw_badge(UI_CONTENT_X + 36, y, _lineBuf);
   if (wifiStrongestRSSI > -999) {
     snprintf(_lineBuf, sizeof(_lineBuf), "%ddBm", wifiStrongestRSSI);
@@ -1571,7 +1872,7 @@ void display_page_summary() {
   display.setCursor(UI_CONTENT_X, y);
   display.setTextColor(BLACK);
   display.print("BLE");
-  snprintf(_lineBuf, sizeof(_lineBuf), "%d", totalBleHits);
+  snprintf(_lineBuf, sizeof(_lineBuf), "%d", bleActiveCount);
   ui_draw_badge(UI_CONTENT_X + 36, y, _lineBuf);
   if (bleStrongestRSSI > -999) {
     snprintf(_lineBuf, sizeof(_lineBuf), "%ddBm", bleStrongestRSSI);
@@ -2032,6 +2333,7 @@ void enter_sleep() {
     pBLEScan->stop();
   }
   bleScanRunning = false;
+  clear_all_tracks();
 
   // Put radio to sleep
   radio->sleep();
@@ -2074,8 +2376,12 @@ void wake_up() {
 
   // Wake radio and restore config
   radio->standby();
-  elrsScanPhase = PHASE_CAD;
+  clear_all_tracks();
+  elrs_reset_window();
   elrs_restore_cad_config();
+  radioInCadMode = true;
+  radioCurrentBand = elrsCurrentBand;
+  radioCurrentRate = NULL;
 
   // Re-enable battery ADC
   pinMode(46, OUTPUT);
@@ -2140,6 +2446,14 @@ void serial_task() {
       dump_json();
     } else if (cmd == "status") {
       Serial.printf("ELRS hits: %d (strongest: %d dBm)\n", totalElrsHits, elrsStrongestRSSI);
+      Serial.printf("ELRS tracking: %d/%d slots active\n", activeTrackCount, MAX_TRACK_SLOTS);
+      for (int i = 0; i < MAX_TRACK_SLOTS; i++) {
+        if (!trackSlots[i].active) continue;
+        const char* bname = (trackSlots[i].band == BAND_900) ? "900" : "2.4G";
+        Serial.printf("  Slot#%d: %s %s  RSSI %.0f  pkts %d\n",
+          trackSlots[i].id, bname, trackSlots[i].rate->name,
+          trackSlots[i].smoothedRSSI, trackSlots[i].rxCount);
+      }
       Serial.printf("WiFi detected: %d\n", totalWifiHits);
       Serial.printf("BLE Remote ID: %d\n", totalBleHits);
       Serial.printf("GPS: %s (sats: %d)\n",
@@ -2151,9 +2465,10 @@ void serial_task() {
       detectionCount = 0;
       detectionHead = 0;
       totalElrsHits = totalWifiHits = totalBleHits = 0;
-      elrsHitCount = wifiDetectedCount = bleRemoteIDCount = 0;
+      elrsHitCount = 0;
       elrsStrongestRSSI = wifiStrongestRSSI = bleStrongestRSSI = -999;
       elrsBestSNR = -999;
+      clear_all_tracks();
       Serial.println("Detections cleared");
     } else if (cmd == "help") {
       Serial.println("Commands: dump/json, status, clear, help");
@@ -2445,6 +2760,10 @@ void setup() {
     Serial.printf("FAILED (error %d)\n", state);
     bootLogSetStatus(2, 0);
   }
+
+  // Initialize multi-signal tracking slots
+  clear_all_tracks();
+
   bootProgress = 60;
   bootLogRefresh();
 

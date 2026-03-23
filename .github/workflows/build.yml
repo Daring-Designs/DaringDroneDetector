@@ -5,10 +5,8 @@ on:
     tags: ['v*']
 
 jobs:
-  release:
+  build-heltec:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout code
@@ -42,13 +40,71 @@ jobs:
             --output-dir build \
             DaringDroneDetector
 
-      - name: Rename binary with version
+      - name: Stage binary
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          mv build/DaringDroneDetector.ino.bin "DaringDroneDetector-${VERSION}.bin"
+          cp build/DaringDroneDetector.ino.bin "DaringDroneDetector-${VERSION}.bin"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-bin
+          path: DaringDroneDetector-*.bin
+
+  build-lilygo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install Espressif ESP32 core
+        env:
+          BOARD_URL: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+        run: |
+          arduino-cli core update-index --additional-urls "$BOARD_URL"
+          arduino-cli core install esp32:esp32 --additional-urls "$BOARD_URL"
+
+      - name: Install required libraries
+        run: |
+          arduino-cli lib install RadioLib
+          arduino-cli lib install "Arduino_GFX_Library"
+
+      - name: Compile sketch
+        run: |
+          arduino-cli compile \
+            --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB,FlashSize=16M" \
+            --output-dir build \
+            LillyGo_S3_Pro_LR1121
+
+      - name: Stage binary
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          cp build/LillyGo_S3_Pro_LR1121.ino.bin "LillyGo_S3_Pro_LR1121-${VERSION}.bin"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lilygo-bin
+          path: LillyGo_S3_Pro_LR1121-*.bin
+
+  release:
+    needs: [build-heltec, build-lilygo]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: DaringDroneDetector-*.bin
+          files: "*.bin"
           generate_release_notes: true
